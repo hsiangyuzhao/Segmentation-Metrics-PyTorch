@@ -1,4 +1,4 @@
-# Segmentation Metrics Calculation PyTorch Implementation
+# Segmentation Metrics PyTorch Implementation
 **Author: Hsiangyu Zhao**
 ## Introduction
 This file provides a Python class for semantic segmentation metrics calculation. Supported metrics including Dice coeff, intersection over union (IoU), precision and recall. All metrics supprot 4 kinds of average: binary, micro, macro and weighted.  
