@@ -6,15 +6,15 @@ import torch.nn as nn
 class SegmentationMetrics(object):
     r"""Calculate common metrics in semantic segmentation to evalueate model preformance.
 
-    Supported metrics: Dice Coeff, IoU (Intersection over Union),
-    precision score and recall score.
+    Supported metrics: Pixel accuracy, Dice Coeff, precision score and recall score.
+    
+    Pixel accuracy measures how many pixels in a image are predicted correctly.
 
     Dice Coeff is a measure function to measure similarity over 2 sets, which is usually used to
     calculate the similarity of two samples. Dice equals to f1 score in semantic segmentation tasks.
-
-    Intersection over Union, also referred to as the Jaccard index, is essentially a method to
-    quantify the percent overlap between the target mask and our prediction output. This metric
-    is closely related to the Dice coefficient.
+    
+    It should be noted that Dice Coeff and Intersection over Union are highly related, so you need 
+    NOT calculate these metrics both, the other can be calcultaed directly when knowing one of them.
 
     Precision describes the purity of our positive detections relative to the ground truth. Of all
     the objects that we predicted in a given image, precision score describes how many of those objects
@@ -28,33 +28,15 @@ class SegmentationMetrics(object):
         eps: float, a value added to the denominator for numerical stability.
             Default: 1e-5
 
-        average: string, [None, 'binary', 'macro' (default), 'micro', 'weighted']
-            This parameter is required for multiclass/multilabel targets.
-            If ``None``, the scores for each class are returned. Otherwise, this
-            determines the type of averaging performed on the data:
-
-            ``'binary'``:
-            
-                Only report results for positive class, in this case class 1.
-                This is applicable only if `y_true` and `y_pred` are binary,
-                where 0 denotes negative class and 1 denotes positive class.
-            ``'micro'``:
-                Calculate metrics globally by counting the total true positives,
-                false negatives and false positives.
-            ``'macro'``:
-                Calculate metrics for each label, and find their unweighted
-                mean.  This does not take label imbalance into account.
-            ``'weighted'``:
-                Calculate metrics for each label, and find their average weighted
-                by support (the number of true instances for each label). This
-                alters 'macro' to account for label imbalance; it can result in an
-                F-score (dice coeff) that is not between precision and recall.
+        average: bool. Default: ``True``
+            When set to ``True``, average Dice Coeff, precision and recall are
+            returned. Otherwise Dice Coeff, precision and recall of each class
+            will be returned as a numpy array.
 
         ignore_background: bool. Default: ``True``
             When set to ``True``, the class will not calculate related metrics on
             background pixels. When the segmentation of background pixels is not
             important, set this value to ``True``.
-            This argment is ignored if set `average='binary'`.
 
         activation: [None, 'none', 'softmax' (default), 'sigmoid', '0-1']
             This parameter determines what kind of activation function that will be
@@ -66,15 +48,10 @@ class SegmentationMetrics(object):
         y_pred: :math:`(N, C, H, W)`, torch tensor.
 
     Examples::
-        >>> mask = [[[0, 1], [0, 2], [2, 1], [1, 1]], [[1, 2], [2, 0], [1, 1], [2, 2]]]
-        >>> y_true = torch.as_tensor(mask)
-        >>> y_pred = torch.randn(2, 3, 4, 2)
-        >>> metric_calculator = SegmentationMetrics(average='macro', ignore_background=True)
-        >>> dice, iou, precision, recall = metric_calculator(y_true, y_pred)
+        >>> metric_calculator = SegmentationMetrics(average=True, ignore_background=True)
+        >>> pixel_accuracy, dice, precision, recall = metric_calculator(y_true, y_pred)
     """
-    def __init__(self, eps=1e-5, average='macro', ignore_background=True, activation='softmax'):
-        assert average in [None, 'none', 'binary', 'micro', 'macro', 'weighted']
-
+    def __init__(self, eps=1e-5, average=True, ignore_background=True, activation='0-1'):
         self.eps = eps
         self.average = average
         self.ignore = ignore_background
@@ -84,7 +61,9 @@ class SegmentationMetrics(object):
     def _one_hot(gt, pred, class_num):
         # transform sparse mask into one-hot mask
         # shape: (B, H, W) -> (B, C, H, W)
-        one_hot = torch.zeros((gt.shape[0], class_num, gt.shape[1], gt.shape[2])).to(pred.device, dtype=torch.float)
+        input_shape = tuple(gt.shape)  # (N, H, W, ...)
+        new_shape = (input_shape[0], class_num) + input_shape[1:]
+        one_hot = torch.zeros(new_shape).to(pred.device, dtype=torch.float)
         target = one_hot.scatter_(1, gt.unsqueeze(1).long().data, 1.0)
         return target
 
@@ -93,7 +72,6 @@ class SegmentationMetrics(object):
         # perform calculation on a batch
         # for precise result in a single image, plz set batch size to 1
         matrix = np.zeros((3, class_num))
-        weights = np.zeros(class_num)
 
         # calculate tp, fp, fn per class
         for i in range(class_num):
@@ -105,70 +83,35 @@ class SegmentationMetrics(object):
             pred_flat = class_pred.contiguous().view(-1, )  # shape: (N * H * W, )
             gt_flat = class_gt.contiguous().view(-1, )  # shape: (N * H * W, )
 
-            weight = torch.sum(gt_flat)
-
             tp = torch.sum(gt_flat * pred_flat)
             fp = torch.sum(pred_flat) - tp
             fn = torch.sum(gt_flat) - tp
 
             matrix[:, i] = tp.item(), fp.item(), fn.item()
-            weights[i] = weight
 
-        return matrix, weights
-
-    def _calculate_binary_metrics(self, gt, pred, class_num):
-        # calculate metrics in binary-class segmentation
-        matrix, _ = self._get_class_data(gt, pred, class_num)
-        matrix = matrix[:, 1:]
-
-        tp = np.sum(matrix[0, :])
-        fp = np.sum(matrix[1, :])
-        fn = np.sum(matrix[2, :])
-        dice = (2 * tp + self.eps) / (2 * tp + fp + fn + self.eps)
-        iou = (tp + self.eps) / (tp + fp + fn + self.eps)
-        precision = (tp + self.eps) / (tp + fp + self.eps)
-        recall = (tp + self.eps) / (tp + fn + self.eps)
-
-        return dice, iou, precision, recall
+        return matrix
 
     def _calculate_multi_metrics(self, gt, pred, class_num):
         # calculate metrics in multi-class segmentation
-        matrix, weights = self._get_class_data(gt, pred, class_num)
+        matrix = self._get_class_data(gt, pred, class_num)
         if self.ignore:
             matrix = matrix[:, 1:]
-            weights = weights[1:]
 
-        if self.average == 'micro':
-            tp = np.sum(matrix[0, :])
-            fp = np.sum(matrix[1, :])
-            fn = np.sum(matrix[2, :])
-            dice = (2 * tp + self.eps) / (2 * tp + fp + fn + self.eps)
-            iou = (tp + self.eps) / (tp + fp + fn + self.eps)
-            precision = (tp + self.eps) / (tp + fp + self.eps)
-            recall = (tp + self.eps) / (tp + fn + self.eps)
+        # tp = np.sum(matrix[0, :])
+        # fp = np.sum(matrix[1, :])
+        # fn = np.sum(matrix[2, :])
 
-        elif self.average in [None, 'none']:
-            dice = (2 * matrix[0, :] + self.eps) / (2 * matrix[0, :] + matrix[1, :] + matrix[2, :] + self.eps)
-            iou = (matrix[0, :] + self.eps) / (matrix[0, :] + matrix[1, :] + matrix[2, :] + self.eps)
-            precision = (matrix[0, :] + self.eps) / (matrix[0, :] + matrix[1, :] + self.eps)
-            recall = (matrix[0, :] + self.eps) / (matrix[0, :] + matrix[2, :] + self.eps)
+        pixel_acc = (np.sum(matrix[0, :]) + self.eps) / (np.sum(matrix[0, :]) + np.sum(matrix[1, :]))
+        dice = (2 * matrix[0] + self.eps) / (2 * matrix[0] + matrix[1] + matrix[2] + self.eps)
+        precision = (matrix[0] + self.eps) / (matrix[0] + matrix[1] + self.eps)
+        recall = (matrix[0] + self.eps) / (matrix[0] + matrix[2] + self.eps)
 
-        else:
-            dice_list = (2 * matrix[0, :] + self.eps) / (2 * matrix[0, :] + matrix[1, :] + matrix[2, :] + self.eps)
-            iou_list = (matrix[0, :] + self.eps) / (matrix[0, :] + matrix[1, :] + matrix[2, :] + self.eps)
-            precision_list = (matrix[0, :] + self.eps) / (matrix[0, :] + matrix[1, :] + self.eps)
-            recall_list = (matrix[0, :] + self.eps) / (matrix[0, :] + matrix[2, :] + self.eps)
-            if self.average == 'weighted':
-                dice_list = dice_list * weights / np.sum(weights)
-                iou_list = iou_list * weights / np.sum(weights)
-                precision_list = precision_list * weights / np.sum(weights)
-                recall_list = recall_list * weights / np.sum(weights)
-            dice = np.average(dice_list)
-            iou = np.average(iou_list)
-            precision = np.average(precision_list)
-            recall = np.average(recall_list)
+        if self.average:
+            dice = np.average(dice)
+            precision = np.average(precision)
+            recall = np.average(recall)
 
-        return dice, iou, precision, recall
+        return pixel_acc, dice, precision, recall
 
     def __call__(self, y_true, y_pred):
         class_num = y_pred.size(1)
@@ -189,9 +132,56 @@ class SegmentationMetrics(object):
             raise NotImplementedError("Not a supported activation!")
 
         gt_onehot = self._one_hot(y_true, y_pred, class_num)
-        if self.average == 'binary':
-            assert activated_pred.shape[1] == 2  # Targets must be binary when set `average='binary'`
-            dice, iou, precision, recall = self._calculate_binary_metrics(gt_onehot, activated_pred, class_num)
+        pixel_acc, dice, precision, recall = self._calculate_multi_metrics(gt_onehot, activated_pred, class_num)
+        return pixel_acc, dice, precision, recall
+
+
+class BinaryMetrics():
+    r"""Calculate common metrics in binary cases.
+    In binary cases it should be noted that y_pred shape shall be like (N, 1, H, W), or an assertion 
+    error will be raised.
+    Also this calculator provides the function to calculate specificity, also known as true negative 
+    rate, as specificity/TPR is meaningless in multiclass cases.
+    """
+    def __init__(self, eps=1e-5, activation='0-1'):
+        self.eps = eps
+        self.activation = activation
+
+    def _calculate_overlap_metrics(self, gt, pred):
+        output = pred.view(-1, )
+        target = gt.view(-1, ).float()
+
+        tp = torch.sum(output * target)  # TP
+        fp = torch.sum(output * (1 - target))  # FP
+        fn = torch.sum((1 - output) * target)  # FN
+        tn = torch.sum((1 - output) * (1 - target))  # TN
+
+        pixel_acc = (tp + tn + self.eps) / (tp + tn + fp + fn + self.eps)
+        dice = (2 * tp + self.eps) / (2 * tp + fp + fn + self.eps)
+        precision = (tp + self.eps) / (tp + fp + self.eps)
+        recall = (tp + self.eps) / (tp + fn + self.eps)
+        specificity = (tn + self.eps) / (tn + fp + self.eps)
+
+        return pixel_acc, dice, precision, specificity, recall
+
+    def __call__(self, y_true, y_pred):
+        # y_true: (N, H, W)
+        # y_pred: (N, 1, H, W)
+        if self.activation in [None, 'none']:
+            activation_fn = lambda x: x
+            activated_pred = activation_fn(y_pred)
+        elif self.activation == "sigmoid":
+            activation_fn = nn.Sigmoid()
+            activated_pred = activation_fn(y_pred)
+        elif self.activation == "0-1":
+            sigmoid_pred = nn.Sigmoid()(y_pred)
+            activated_pred = (sigmoid_pred > 0.5).float().to(y_pred.device)
         else:
-            dice, iou, precision, recall = self._calculate_multi_metrics(gt_onehot, activated_pred, class_num)
-        return dice, iou, precision, recall
+            raise NotImplementedError("Not a supported activation!")
+
+        assert activated_pred.shape[1] == 1, 'Predictions must contain only one channel' \
+                                             ' when performing binary segmentation'
+        pixel_acc, dice, precision, specificity, recall = self._calculate_overlap_metrics(y_true.to(y_pred.device,
+                                                                                                    dtype=torch.float),
+                                                                                          activated_pred)
+        return [pixel_acc, dice, precision, specificity, recall]
