@@ -2,7 +2,7 @@
 **Author: Hsiangyu Zhao**
 
 ## Introduction
-This file provides 2 Python classes for semantic segmentation metrics calculation, including multiclass cases and binary cases. Supported metrics including pixel accuracy, Dice coeff, precision and recall (Specificity is also supported in binary cases as it is meaningless in multiclass cases). The function of providing average metric (e.g. average Dice, average precision, etc.) and ignoreing background is also supported.
+This file provides 2 Python classes for semantic segmentation metrics calculation, including multiclass cases and binary cases. Supported metrics including pixel accuracy, Dice coeff, precision and recall (Specificity is also supported in binary cases as it is meaningless in multiclass cases). The function of providing average metric (e.g. average Dice, average precision, etc.) and ignoreing background is also supported.  
 Calculation can be performed during training on batches, so tranformation from Torch Tensor to numpy array or PIL images is not needed. Normally the metrics are calculated on batches, which is fast and easy to implement but accuracy is compromised. When set batch size to one, calculation will be performed per image. We recommend setting batch size to one during inference as it provides accurate results on every image.
 
 ## Requirements
@@ -17,8 +17,8 @@ numpy 1.17.4
 
 ## Supproted Metrics
 ### Pixel accuracy
-Pixel accuracy measures how many pixels are predicted correctly. In binary cases:
-$Pixel Acc = \frac{TP + TN}{TP + TN + FP + FN}$ 
+Pixel accuracy measures how many pixels are predicted correctly. In binary cases:  
+$Pixel Acc = \frac{TP + TN}{TP + TN + FP + FN}$  
 In multiclass cases it can be calculated from confusion matrix, by dividing the sum of diagonal elements (ture positives for all classes) with the total number of pixels.
 ### Dice coeff
 Dice evaluates the overlap rate of prediction results and ground truth; equals to f1 score in defination.  
@@ -30,7 +30,7 @@ $Precision = \frac{TP}{TP + FP}$
 describes the completeness of our positive predictions relative to the ground truth.  
 $Recall = \frac{TP}{TP + FN}$  
 ### Specificity
-Also known as true negative rate (TNR)
+Also known as true negative rate (TNR)  
 $Specificity = \frac{TN}{TN + FP}$  
 
 🛑 **Please feel free to use it and report any potential issues or bugs! Enjoy!**
